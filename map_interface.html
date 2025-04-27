@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SafeNav – Route Finder w/ Report Incident</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    html, body { margin:0; padding:0; height:100%; width:100%; }
+    #map { position:absolute; top:0; left:0; right:0; bottom:0; }
+
+    /* ----- LOGO ----- */
+    .logo {
+  position: absolute;
+  top: 10px;
+  left: 50px;
+  z-index: 1003;
+  font-family: sans-serif;
+  font-size: 5rem;       /* was 1.5rem, now doubled */
+  font-weight: bold;
+  color: #ff5722;
+  background: transparent;
+  pointer-events: none;
+}
+
+    .controls {
+      position: absolute;
+      top: 10px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(255,255,255,0.85);
+      padding: 6px 10px;
+      border-radius: 6px;
+      display: flex; gap: 8px;
+      z-index: 1001;
+      font-family: sans-serif;
+    }
+    .controls input {
+      padding:6px; font-size:1rem; width:600px;
+    }
+    .controls button {
+      padding:6px 12px; font-size:1rem;
+      cursor: pointer;
+    }
+
+    .info {
+      position: absolute;
+      bottom: 20px; left: 20px;
+      background: rgba(255,255,255,0.9);
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-family: sans-serif;
+      font-size: 1.2rem;
+      line-height: 1.4;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      z-index: 1001;
+      max-width: 300px;
+    }
+
+    .report-btn {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      z-index: 1002;
+      background: #ff4444;
+      color: #fff;
+      border: none;
+      padding: 32px 48px;
+      font-size: 1.5rem;
+      border-radius: 6px;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    }
+    .report-btn:hover {
+      background: #cc0000;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Logo -->
+  <div class="logo">SafeNav</div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <input id="start" type="text" placeholder="Start address (e.g. Irvine)" />
+    <button id="useMyLocBtn" onclick="toggleUseMyLoc()">Use My Location</button>
+    <input id="end"   type="text" placeholder="End address (e.g. Santa Monica)" />
+    <button onclick="getRoute()">Get Route</button>
+  </div>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+  <!-- Info Panel -->
+  <div id="info" class="info">
+    Enter addresses & click “Get Route.”<br>
+    Driving & walking miles + ETA will appear here.
+  </div>
+
+  <!-- Report Button -->
+  <button class="report-btn" onclick="reportIncident()">
+    Report Incident
+  </button>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    // Initialize map
+    const map = L.map('map').setView([33.6846, -117.8265], 10);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution:'© OpenStreetMap contributors',
+      maxZoom:19
+    }).addTo(map);
+
+    // Hard-coded unsafe zones
+    const unsafe = [
+      [33.6846,-117.8265],[33.7036,-117.8100],[33.6700,-117.8500],
+      [34.0522,-118.2437],[34.0211,-118.2890],[34.0194,-118.4108],
+      [34.1400,-118.2817],[34.0525,-118.4662],[34.0686,-118.1570],
+      [34.1016,-118.3520],[33.6391,-117.8678],[33.8353,-117.9145],
+      [33.5539,-117.7513],[33.6741,-117.8180],[33.8166,-118.0000],
+      [33.7175,-117.9931],[33.6681,-117.6981],[33.7866,-118.1553],
+      [34.1458,-118.0368],[34.1480,-118.0845],[34.0407,-118.2000],
+      [33.7879,-117.9143]
+    ];
+    unsafe.forEach(([lat,lng]) => {
+      L.circle([lat,lng], {
+        radius:220,
+        color:'red',
+        fillColor:'#f03',
+        fillOpacity:0.4,
+        weight:2
+      }).addTo(map).bindPopup('Unsafe Area');
+    });
+
+    // GPS & Location Marker
+    let deviceMarker = null, lastDevicePos = null, useMyLoc = false;
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        pos => updateDevice(pos.coords),
+        err => console.warn('Initial GPS error', err),
+        { enableHighAccuracy:true, timeout:10000 }
+      );
+      navigator.geolocation.watchPosition(
+        pos => updateDevice(pos.coords),
+        err => console.warn('Watch GPS error', err),
+        { enableHighAccuracy:true, maximumAge:10000, timeout:10000 }
+      );
+    } else {
+      alert('Geolocation not supported.');
+    }
+
+    function updateDevice(coords) {
+      const { latitude:lat, longitude:lng } = coords;
+      lastDevicePos = {lat, lng};
+      if (!deviceMarker) {
+        deviceMarker = L.circleMarker([lat, lng], {
+          radius:15,
+          color:'blue',
+          fillColor:'#30f',
+          fillOpacity:0.9,
+          weight:2
+        }).addTo(map).bindPopup('You are here');
+      } else {
+        deviceMarker.setLatLng([lat, lng]);
+      }
+      if (useMyLoc) {
+        document.getElementById('start').value =
+          `${lat.toFixed(5)},${lng.toFixed(5)}`;
+      }
+    }
+
+    // Toggle “Use My Location”
+    function toggleUseMyLoc(){
+      useMyLoc = !useMyLoc;
+      const btn = document.getElementById('useMyLocBtn');
+      const startInput = document.getElementById('start');
+      if (useMyLoc){
+        btn.textContent = 'Using My Location';
+        startInput.disabled = true;
+        if (lastDevicePos){
+          startInput.value =
+            `${lastDevicePos.lat.toFixed(5)},${lastDevicePos.lng.toFixed(5)}`;
+        }
+      } else {
+        btn.textContent = 'Use My Location';
+        startInput.disabled = false;
+      }
+    }
+
+    // Helpers
+    function toMiles(m){ return m/1609.34; }
+    function fmtTime(s){
+      const h = Math.floor(s/3600),
+            m = Math.round((s%3600)/60);
+      return (h>0? h+'h ':'') + m+'m';
+    }
+
+    // Routing
+    let routeLayer, startM, endM;
+    async function getRoute(){
+      const start = document.getElementById('start').value.trim(),
+            end   = document.getElementById('end').value.trim();
+      if (!start || !end) return alert('Enter both addresses!');
+
+      let res, data;
+      try {
+        res = await fetch('/get_route', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ start, end })
+        });
+        data = await res.json();
+      } catch (e) {
+        console.error(e);
+        return alert('Network error');
+      }
+      if (!res.ok) return alert(data.error || 'Route error');
+
+      // Clear old
+      if (routeLayer) map.removeLayer(routeLayer);
+      if (startM)     map.removeLayer(startM);
+      if (endM)       map.removeLayer(endM);
+
+      // Draw
+      routeLayer = L.polyline(data.route_coords, {
+        color:'blue', weight:5, opacity:0.7
+      }).addTo(map);
+      startM = L.marker([data.start_coords[1], data.start_coords[0]])
+               .addTo(map).bindPopup('Start');
+      endM   = L.marker([data.end_coords[1], data.end_coords[0]])
+               .addTo(map).bindPopup('End');
+      map.fitBounds(routeLayer.getBounds());
+
+      // Info
+      const miCar  = toMiles(data.dist_car).toFixed(2),
+            miWalk = toMiles(data.dist_walk).toFixed(2),
+            tCar   = fmtTime(data.dur_car),
+            tWalk  = fmtTime(data.dur_walk);
+      document.getElementById('info').innerHTML =
+        `<strong>Driving:</strong> ${miCar} mi, ≈ ${tCar}<br>` +
+        `<strong>Walking:</strong> ${miWalk} mi, ≈ ${tWalk}`;
+    }
+
+    // Incident reporting
+    async function reportIncident(){
+      if (!lastDevicePos) return alert('Waiting for GPS fix…');
+      try {
+        const res = await fetch('/report_incident', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(lastDevicePos)
+        });
+        const j = await res.json();
+        if (!res.ok) return alert('Error: ' + (j.error || res.status));
+
+        alert(
+          `Incident at ${lastDevicePos.lat.toFixed(5)}, ` +
+          `${lastDevicePos.lng.toFixed(5)}`
+        );
+        L.circle([ lastDevicePos.lat, lastDevicePos.lng ], {
+          radius:200,
+          color: 'black',
+          fillColor:'black',
+          fillOpacity:0.6,
+          weight:2
+        }).addTo(map).bindPopup('Reported Incident');
+      } catch(e) {
+        console.error(e);
+        alert('Network error.');
+      }
+    }
+  </script>
+</body>
+</html>
